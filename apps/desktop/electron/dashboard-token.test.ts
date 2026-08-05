@@ -145,3 +145,18 @@ test('adoptServedDashboardToken falls back to the spawn token when the fetch fai
   assert.equal(logs.length, 1)
   assert.match(logs[0], /could not read served dashboard token \(Hermes backend\): boom/)
 })
+
+test('adoptServedDashboardToken treats a headless backend 404 as expected (no error log)', async () => {
+  const logs = []
+
+  const token = await adoptServedDashboardToken('http://127.0.0.1:9120', 'spawn-token', {
+    childAlive: () => true,
+    fetchText: async () => {
+      throw new Error('404: {"error":"Headless backend (hermes serve): web UI disabled — use `hermes dashboard` for the browser UI."}')
+    },
+    rememberLog: line => logs.push(line)
+  })
+
+  assert.equal(token, 'spawn-token')
+  assert.equal(logs.length, 0)
+})

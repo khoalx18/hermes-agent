@@ -71,6 +71,7 @@ import {
   profileRemoteOverride,
   profileSshOverride,
   resolveAuthMode,
+  resolvePrimaryProfileKey,
   resolveProfileBackendRoute,
   resolveTestWsUrl,
   savedProfileSsh,
@@ -609,11 +610,10 @@ const DESKTOP_INSTALLATION_PATH = path.join(app.getPath('userData'), 'desktop-in
 const DESKTOP_UPDATE_CONFIG_PATH = path.join(app.getPath('userData'), 'updates.json')
 const DESKTOP_WINDOW_STATE_PATH = path.join(app.getPath('userData'), 'window-state.json')
 // active-profile.json records which Hermes profile the desktop launches its
-// local backend as. When set, startHermes() passes `hermes --profile <name>
-// dashboard …`, which deterministically pins HERMES_HOME (see
-// _apply_profile_override in hermes_cli/main.py) and bypasses the sticky
-// ~/.hermes/active_profile file. Unset (null) preserves the legacy behavior:
-// no --profile flag, so the backend honors active_profile / default.
+// local backend as. An explicit Desktop choice wins; when unset,
+// primaryProfileKey() mirrors the CLI sticky active_profile/default fallback.
+// startHermes() then pins that resolved owner with `--profile`, so routing and
+// the actual state.db cannot diverge.
 const DESKTOP_PROFILE_CONFIG_PATH = path.join(app.getPath('userData'), 'active-profile.json')
 // Mirrors hermes_cli.profiles._PROFILE_ID_RE so we never hand the backend a
 // value its profile resolver would reject and exit on.
@@ -6949,6 +6949,24 @@ function readActiveDesktopProfile() {
   return null
 }
 
+// Match the CLI's legacy launch behavior when Desktop has no explicit profile:
+// `hermes serve` reads HERMES_HOME/active_profile before choosing its state.db.
+// Electron must use the same owner for request routing or it can mistake a
+// sticky named-profile backend for `default` and return "Session not found".
+function readStickyCliProfile() {
+  try {
+    const name = fs.readFileSync(path.join(HERMES_HOME, 'active_profile'), 'utf8').trim()
+
+    if (name && (name === 'default' || PROFILE_NAME_RE.test(name))) {
+      return name
+    }
+  } catch {
+    // Missing or malformed → the CLI falls back to default.
+  }
+
+  return null
+}
+
 function writeActiveDesktopProfile(name) {
   const value = typeof name === 'string' ? name.trim() : ''
 
@@ -7996,11 +8014,10 @@ async function waitForBackendExit(child, timeoutMs = 5000) {
   })
 }
 
-// The profile the primary (window) backend runs as. readActiveDesktopProfile()
-// returns the desktop's stored preference, or null when unset (legacy launch
-// that defers to active_profile / default).
+// The profile the primary (window) backend runs as. An explicit Desktop
+// preference wins; otherwise mirror the CLI's sticky active_profile fallback.
 function primaryProfileKey() {
-  return readActiveDesktopProfile() || 'default'
+  return resolvePrimaryProfileKey(readActiveDesktopProfile(), readStickyCliProfile())
 }
 
 // Options describing the current connection setup for `resolveProfileBackendRoute`.
@@ -8431,16 +8448,11 @@ async function startHermes() {
     const token = crypto.randomBytes(32).toString('base64url')
     // --port 0: the OS assigns an ephemeral port; the child announces it on stdout.
     const backendArgs = ['serve', '--host', '127.0.0.1', '--port', '0']
-    // Pin the desktop's chosen profile via the global --profile flag. This is
-    // deterministic (it wins over the sticky ~/.hermes/active_profile file) and
-    // resolves HERMES_HOME the same way `hermes -p <name>` does on the CLI. An
-    // unset preference keeps the legacy launch so existing installs are
-    // unaffected.
-    const activeProfile = readActiveDesktopProfile()
-
-    if (activeProfile) {
-      backendArgs.unshift('--profile', activeProfile)
-    }
+    // Resolve and pin the exact profile owner used by request routing. Passing
+    // --profile even for the sticky/default fallback prevents the child CLI from
+    // re-reading a different active_profile between routing and spawn.
+    const activeProfile = primaryProfileKey()
+    backendArgs.unshift('--profile', activeProfile)
 
     const setup = await runPrimaryBackendStartup({
       connectRemote,

@@ -36,6 +36,7 @@ import {
   profileRemoteOverride,
   profileSshOverride,
   resolveAuthMode,
+  resolvePrimaryProfileKey,
   resolveProfileBackendRoute,
   resolveTestWsUrl,
   RT_COOKIE_VARIANTS,
@@ -50,6 +51,25 @@ test('connectionScopeKey trims to a name or null for the global scope', () => {
   assert.equal(connectionScopeKey(''), null)
   assert.equal(connectionScopeKey(null), null)
   assert.equal(connectionScopeKey(undefined), null)
+})
+
+test('resolvePrimaryProfileKey follows the sticky CLI profile when Desktop has no preference', () => {
+  assert.equal(resolvePrimaryProfileKey(null, 'frontdesk'), 'frontdesk')
+  assert.equal(resolvePrimaryProfileKey('', '  coding  '), 'coding')
+})
+
+test('sticky named primary keeps default-session mutations off the named backend', () => {
+  const primaryProfile = resolvePrimaryProfileKey(null, 'frontdesk')
+
+  assert.deepEqual(
+    resolveProfileBackendRoute('default', { primaryProfile, globalRemote: false }),
+    { backend: 'pool', descriptorProfile: null, scopePath: false }
+  )
+})
+
+test('resolvePrimaryProfileKey prefers the explicit Desktop profile and otherwise defaults safely', () => {
+  assert.equal(resolvePrimaryProfileKey('research', 'frontdesk'), 'research')
+  assert.equal(resolvePrimaryProfileKey(null, null), 'default')
 })
 
 test('normAuthMode coerces to token unless explicitly oauth', () => {

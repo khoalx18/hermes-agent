@@ -81,13 +81,26 @@ function isForeignBackendToken({ servedToken, spawnToken, childAlive }) {
 }
 
 /**
+ * A headless backend (`hermes serve`, web UI disabled) serves no dashboard
+ * HTML, so token discovery 404s by design. That is a normal state for profile
+ * backends — the spawn token remains authoritative, so skip the error log.
+ */
+function isHeadlessBackendError(error) {
+  return error instanceof Error && /web UI disabled/i.test(error.message)
+}
+
+/**
  * Resolve the token the backend actually serves, adopting benign drift and
  * failing loudly on a foreign backend. `childAlive` is a thunk so liveness is
  * sampled after the fetch, not before.
  */
 async function adoptServedDashboardToken(baseUrl, spawnToken, { childAlive, label = 'Hermes backend', ...options }) {
   const servedToken = await resolveServedDashboardToken(baseUrl, spawnToken, options).catch(error => {
-    options.rememberLog?.(`[boot] could not read served dashboard token (${label}): ${error.message}`)
+    // Headless profile backends are expected to 404 token discovery; only
+    // real fetch failures deserve a log line.
+    if (!isHeadlessBackendError(error)) {
+      options.rememberLog?.(`[boot] could not read served dashboard token (${label}): ${error.message}`)
+    }
 
     return spawnToken
   })

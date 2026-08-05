@@ -379,6 +379,18 @@ export interface ProfileRouteOptions {
   profileRemoteOverride?: boolean
 }
 
+/**
+ * Resolve the profile that actually owns the window backend.
+ *
+ * An explicit Desktop preference wins. When it is unset, the CLI launcher
+ * honors HERMES_HOME/active_profile; routing must use that same sticky profile
+ * instead of assuming `default`, otherwise requests for default sessions are
+ * sent to a backend whose state.db belongs to another profile.
+ */
+function resolvePrimaryProfileKey(desktopProfile, stickyCliProfile): string {
+  return connectionScopeKey(desktopProfile) ?? connectionScopeKey(stickyCliProfile) ?? 'default'
+}
+
 export interface ProfileBackendRoute {
   /** Which backend serves this profile: the window backend, or a pooled one. */
   backend: 'pool' | 'primary'
@@ -581,6 +593,7 @@ export {
   profileRemoteOverride,
   profileSshOverride,
   resolveAuthMode,
+  resolvePrimaryProfileKey,
   resolveProfileBackendRoute,
   resolveTestWsUrl,
   RT_COOKIE_VARIANTS,
