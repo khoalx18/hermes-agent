@@ -514,10 +514,10 @@ export function SessionTabMenu({
   return (
     <span className="contents" onContextMenu={event => event.stopPropagation()}>
       <SessionContextMenu
-        onArchive={() => void sessionTileDelegate()?.archiveSession(storedSessionId)}
+        onArchive={() => void sessionTileDelegate()?.archiveSession(storedSessionId, profile)}
         onBranch={() => void sessionTileDelegate()?.branchSession(storedSessionId)}
         onClose={onClose}
-        onDelete={() => void sessionTileDelegate()?.deleteSession(storedSessionId)}
+        onDelete={() => void sessionTileDelegate()?.deleteSession(storedSessionId, profile)}
         onHideTabBar={onHideTabBar}
         onPin={() => (pinned ? unpinSession(pinId) : pinSession(pinId))}
         pinned={pinned}

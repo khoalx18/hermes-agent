@@ -33,13 +33,17 @@ const row = (over: Partial<SessionInfo>): SessionInfo =>
     ...over
   }) as SessionInfo
 
-function renderTile(requestGateway: ReturnType<typeof vi.fn>) {
+function renderTile(
+  requestGateway: ReturnType<typeof vi.fn>,
+  archiveSession = vi.fn(async () => undefined),
+  removeSession = vi.fn(async () => undefined)
+) {
   renderHook(() =>
     useSessionTileDelegate({
-      archiveSession: vi.fn(async () => undefined),
+      archiveSession,
       branchStoredSession: vi.fn(async () => undefined),
       executeSlashCommand: vi.fn(async () => undefined) as never,
-      removeSession: vi.fn(async () => undefined),
+      removeSession,
       requestGateway: requestGateway as never,
       runtimeIdByStoredSessionIdRef: { current: new Map() },
       sessionStateByRuntimeIdRef: { current: new Map() },
@@ -47,6 +51,28 @@ function renderTile(requestGateway: ReturnType<typeof vi.fn>) {
     })
   )
 }
+
+describe('useSessionTileDelegate archiveSession', () => {
+  it('carries the clicked tab profile instead of re-resolving an ambiguous cached id', async () => {
+    const archiveSession = vi.fn(async () => undefined)
+
+    renderTile(vi.fn(), archiveSession)
+    await sessionTileDelegate()!.archiveSession('shared-id', 'default')
+
+    expect(archiveSession).toHaveBeenCalledWith('shared-id', 'default')
+  })
+})
+
+describe('useSessionTileDelegate deleteSession', () => {
+  it('carries the clicked tab profile instead of deleting a duplicate in another profile', async () => {
+    const removeSession = vi.fn(async () => undefined)
+
+    renderTile(vi.fn(), undefined, removeSession)
+    await sessionTileDelegate()!.deleteSession('shared-id', 'default')
+
+    expect(removeSession).toHaveBeenCalledWith('shared-id', 'default')
+  })
+})
 
 describe('useSessionTileDelegate resumeTile', () => {
   beforeEach(() => {

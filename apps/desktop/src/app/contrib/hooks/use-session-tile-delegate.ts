@@ -13,10 +13,10 @@ import type { GatewayRequester } from '../types'
 type SessionStateCache = ReturnType<typeof useSessionStateCache>
 
 interface SessionTileDelegateParams {
-  archiveSession: (storedSessionId: string) => Promise<unknown>
+  archiveSession: (storedSessionId: string, profile?: null | string) => Promise<unknown>
   branchStoredSession: (storedSessionId: string) => Promise<unknown>
   executeSlashCommand: ReturnType<typeof usePromptActions>['executeSlashCommand']
-  removeSession: (storedSessionId: string) => Promise<unknown>
+  removeSession: (storedSessionId: string, profile?: null | string) => Promise<unknown>
   requestGateway: GatewayRequester
   runtimeIdByStoredSessionIdRef: SessionStateCache['runtimeIdByStoredSessionIdRef']
   sessionStateByRuntimeIdRef: SessionStateCache['sessionStateByRuntimeIdRef']
@@ -42,14 +42,14 @@ export function useSessionTileDelegate({
 }: SessionTileDelegateParams): void {
   useEffect(() => {
     setSessionTileDelegate({
-      archiveSession: async storedSessionId => {
-        await archiveSession(storedSessionId)
+      archiveSession: async (storedSessionId, profile) => {
+        await archiveSession(storedSessionId, profile)
       },
       branchSession: async storedSessionId => {
         await branchStoredSession(storedSessionId)
       },
-      deleteSession: async storedSessionId => {
-        await removeSession(storedSessionId)
+      deleteSession: async (storedSessionId, profile) => {
+        await removeSession(storedSessionId, profile)
       },
       executeSlash: async (rawCommand, sessionId) => {
         await executeSlashCommand(rawCommand, { sessionId })

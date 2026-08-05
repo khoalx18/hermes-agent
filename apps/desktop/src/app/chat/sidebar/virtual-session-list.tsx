@@ -31,9 +31,9 @@ export interface VirtualSessionListProps {
   activeSessionId: null | string
   className?: string
   rows: SidebarListRow[]
-  onArchiveSession: (sessionId: string) => void
+  onArchiveSession: (sessionId: string, profile?: null | string) => void
   onBranchSession?: (sessionId: string, profile?: string) => void
-  onDeleteSession: (sessionId: string) => void
+  onDeleteSession: (sessionId: string, profile?: null | string) => void
   onResumeSession: (sessionId: string) => void
   onTogglePin: (sessionId: string) => void
   pinned: boolean
@@ -109,9 +109,9 @@ export const VirtualSessionList: FC<VirtualSessionListProps> = ({
       isPinned: pinned,
       isSelected: session.id === activeSessionId,
       isWorking: workingSessionIdSet.has(session.id),
-      onArchive: () => onArchiveSession(session.id),
+      onArchive: () => onArchiveSession(session.id, session.profile),
       onBranch: onBranchSession ? () => onBranchSession(session.id, session.profile) : undefined,
-      onDelete: () => onDeleteSession(session.id),
+      onDelete: () => onDeleteSession(session.id, session.profile),
       onPin: () => onTogglePin(sessionPinId(session)),
       onResume: () => onResumeSession(session.id),
       reorderable,

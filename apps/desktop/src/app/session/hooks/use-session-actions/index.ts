@@ -1306,10 +1306,21 @@ export function useSessionActions({
   )
 
   const removeSession = useCallback(
-    async (storedSessionId: string) => {
+    async (storedSessionId: string, sessionProfile?: null | string) => {
       clearNotifications()
 
-      const removed = $sessions.get().find(session => sessionMatchesStoredId(session, storedSessionId))
+      const sessions = $sessions.get()
+
+      // A durable id can temporarily exist in more than one profile after an
+      // interrupted cross-profile resume. Prefer the owner carried by the row
+      // the user actually clicked; only fall back to the legacy id-only lookup.
+      const removed =
+        sessionProfile != null
+          ? sessions.find(
+              session => sessionMatchesStoredId(session, storedSessionId) && session.profile === sessionProfile
+            )
+          : sessions.find(session => sessionMatchesStoredId(session, storedSessionId))
+
       const wasSelected = selectedStoredSessionId === storedSessionId
       const closingRuntimeId = wasSelected ? activeSessionId : null
       const previousMessages = $messages.get()
@@ -1339,7 +1350,7 @@ export function useSessionActions({
           await requestGateway('session.close', { session_id: closingRuntimeId }).catch(() => undefined)
         }
 
-        await deleteSession(storedSessionId, removed?.profile)
+        await deleteSession(storedSessionId, sessionProfile ?? removed?.profile)
         clearQueuedPrompts(storedSessionId)
 
         if (closingRuntimeId) {
@@ -1407,10 +1418,16 @@ export function useSessionActions({
   )
 
   const archiveSession = useCallback(
-    async (storedSessionId: string) => {
+    async (storedSessionId: string, sessionProfile?: null | string) => {
       clearNotifications()
 
-      const archived = $sessions.get().find(session => sessionMatchesStoredId(session, storedSessionId))
+      const matchingSessions = $sessions.get().filter(session => sessionMatchesStoredId(session, storedSessionId))
+
+      const archived =
+        sessionProfile != null
+          ? matchingSessions.find(session => session.profile === sessionProfile)
+          : matchingSessions[0]
+
       const wasSelected = selectedStoredSessionId === storedSessionId
       const previousPinned = $pinnedSessionIds.get()
       // Pins are keyed on the durable lineage-root id; the stored id may be the
@@ -1429,7 +1446,7 @@ export function useSessionActions({
       }
 
       try {
-        await setSessionArchived(storedSessionId, true, archived?.profile)
+        await setSessionArchived(storedSessionId, true, sessionProfile ?? archived?.profile)
         // An archived session is hidden from the sidebar; its tile must go too.
         const tiledRuntimeId = runtimeIdByStoredSessionIdRef.current.get(storedSessionId)
         closeSessionTile(storedSessionId)

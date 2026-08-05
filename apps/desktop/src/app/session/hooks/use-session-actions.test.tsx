@@ -4,7 +4,7 @@ import { useEffect } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { noteActiveTreeGroup, revealTreePane } from '@/components/pane-shell/tree/store'
-import { getSession, getSessionMessages, type SessionInfo } from '@/hermes'
+import { deleteSession, getSession, getSessionMessages, type SessionInfo, setSessionArchived } from '@/hermes'
 import { createClientSessionState } from '@/lib/chat-runtime'
 import { clearSessionDraft, stashSessionDraft, takeSessionDraft } from '@/store/composer'
 import { $activeGatewayProfile, $newChatProfile, ensureGatewayProfile } from '@/store/profile'
@@ -76,7 +76,7 @@ function deferred<T>() {
 
 type HarnessHandle = Pick<
   ReturnType<typeof useSessionActions>,
-  'createBackendSessionForSend' | 'selectSidebarItem' | 'startFreshSessionDraft'
+  'archiveSession' | 'createBackendSessionForSend' | 'removeSession' | 'selectSidebarItem' | 'startFreshSessionDraft'
 >
 
 function storedSession(overrides: Partial<SessionInfo> = {}): SessionInfo {
@@ -562,6 +562,58 @@ describe('createBackendSessionForSend profile routing', () => {
     })
 
     expect(params).toMatchObject({ cwd: '/repo/app' })
+  })
+})
+
+describe('profile-aware session mutations', () => {
+  afterEach(() => {
+    cleanup()
+    setSessions([])
+    vi.clearAllMocks()
+  })
+
+  async function renderActions(): Promise<HarnessHandle> {
+    let handle: HarnessHandle | null = null
+
+    render(<Harness onReady={next => (handle = next)} requestGateway={vi.fn(async () => ({}) as never)} />)
+    await waitFor(() => expect(handle).not.toBeNull())
+
+    return handle!
+  }
+
+  it('passes the clicked owner profile to delete and archive APIs when ids overlap', async () => {
+    const handle = await renderActions()
+
+    const overlapping = [
+      storedSession({ id: 'shared-id', profile: 'default' }),
+      storedSession({ id: 'shared-id', profile: 'work' })
+    ]
+
+    setSessions(overlapping)
+    await act(async () => handle.removeSession('shared-id', 'work'))
+
+    expect(deleteSession).toHaveBeenCalledWith('shared-id', 'work')
+
+    setSessions(overlapping)
+    await act(async () => handle.archiveSession('shared-id', 'work'))
+
+    expect(setSessionArchived).toHaveBeenCalledWith('shared-id', true, 'work')
+  })
+
+  it('keeps the id-only owner lookup only for legacy callers without a profile', async () => {
+    const handle = await renderActions()
+
+    const legacy = storedSession({ id: 'legacy-id', profile: 'legacy-owner' })
+
+    setSessions([legacy])
+    await act(async () => handle.removeSession('legacy-id'))
+
+    expect(deleteSession).toHaveBeenCalledWith('legacy-id', 'legacy-owner')
+
+    setSessions([legacy])
+    await act(async () => handle.archiveSession('legacy-id'))
+
+    expect(setSessionArchived).toHaveBeenCalledWith('legacy-id', true, 'legacy-owner')
   })
 })
 

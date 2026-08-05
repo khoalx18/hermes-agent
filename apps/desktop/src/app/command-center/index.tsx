@@ -57,7 +57,7 @@ const EMPTY_PINNED: readonly string[] = []
 interface CommandCenterViewProps {
   initialSection?: CommandCenterSection
   onClose: () => void
-  onDeleteSession: (sessionId: string) => Promise<void>
+  onDeleteSession: (sessionId: string, profile?: null | string) => Promise<void>
   // Accepted for call-site parity; navigation lives in the global Cmd+K palette.
   onNavigateRoute?: (path: string) => void
   onOpenSession: (sessionId: string) => void
@@ -395,7 +395,7 @@ export function CommandCenterView({ initialSection, onClose, onDeleteSession, on
                           </RowIconButton>
                           <RowIconButton
                             className="hover:text-destructive"
-                            onClick={() => void onDeleteSession(session.id)}
+                            onClick={() => void onDeleteSession(session.id, session.profile)}
                             title={cc.deleteSession}
                           >
                             <Trash2 className="size-3.5" />
