@@ -77,7 +77,11 @@ def _patch_list_profiles(names: list[str]):
 
 def test_decompose_with_fanout_creates_children(kanban_home):
     with kb.connect() as conn:
-        tid = kb.create_task(conn, title="ship a feature", triage=True)
+        # Body bắt buộc: body rỗng → spec-gate classify uncertain (GATED),
+        # test này nhằm verify hành vi safe-task fanout (AC-5).
+        tid = kb.create_task(
+            conn, title="ship a feature", body="build it end to end", triage=True
+        )
 
     llm_payload = jsonlib.dumps({
         "fanout": True,
@@ -115,7 +119,10 @@ def test_decompose_with_fanout_creates_children(kanban_home):
 
 def test_decompose_fanout_false_invalid_llm_assignee_uses_default(kanban_home):
     with kb.connect() as conn:
-        tid = kb.create_task(conn, title="route me safely", triage=True)
+        # Body bắt buộc (body rỗng → uncertain/GATED, không còn safe).
+        tid = kb.create_task(
+            conn, title="route me safely", body="cần thực hiện gấp", triage=True
+        )
 
     llm_payload = jsonlib.dumps({
         "fanout": False,
