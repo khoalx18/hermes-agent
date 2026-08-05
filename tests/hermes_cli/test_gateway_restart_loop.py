@@ -628,6 +628,28 @@ class TestLifecycleGuardModule:
         with pytest.raises(GatewayLifecycleBlocked):
             check_gateway_lifecycle("", str(script))
 
+    def test_binary_referenced_file_with_nul_is_skipped_not_crashed(self, tmp_path):
+        """A binary file (NUL bytes, e.g. python.exe) must be skipped, not
+        decoded into a NUL-laden string that later crashes the Path()
+        recursion with 'embedded null character' (regression)."""
+        from cron.lifecycle_guard import (
+            GatewayLifecycleBlocked,
+            check_gateway_lifecycle,
+            contains_gateway_lifecycle_command_or_referenced_script,
+        )
+        binary = tmp_path / "python.exe"
+        # NUL bytes + a '/' token at executable position (like a real PE
+        # binary with embedded path strings) used to decode into a NUL-laden
+        # string and crash the Path() recursion with 'embedded null
+        # character' on resolve.
+        binary.write_bytes(b"/opt/evil\x00rest\x00 junk payload")
+        # Executable-shaped reference: skip the binary, do not raise.
+        assert contains_gateway_lifecycle_command_or_referenced_script(
+            f"{binary.as_posix()} cos.py scan-discover"
+        ) is False
+        # Cron script path: binary is skipped (empty scan), not blocked.
+        check_gateway_lifecycle("clean prompt", str(binary))
+
 
     def test_relative_script_resolved_under_scripts_dir(self, tmp_path, monkeypatch):
         """A bare/relative script name resolves under HERMES_HOME/scripts (the

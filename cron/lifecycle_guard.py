@@ -279,7 +279,12 @@ def _read_referenced_script(path: Path) -> tuple[Optional[str], bool]:
     # #76762). Treat it as "nothing to scan" rather than unsafe: a binary
     # executed by the user is not a referenced *shell script*.
     if b"\x00" in data:
-        return None, False
+        # Binary file (e.g. an executable): never a shell script. Skip it
+        # entirely so its decoded NUL bytes cannot crash the Path() recursion
+        # or be scanned as command text. Return empty text (not None): None is
+        # the "local miss" signal that triggers the read_remote_script
+        # fallback, which would re-read and decode the binary and crash again.
+        return "", False
     if len(data) > _MAX_REFERENCED_SCRIPT_BYTES:
         return None, True
     return data.decode("utf-8", errors="replace"), False
