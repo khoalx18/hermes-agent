@@ -665,7 +665,8 @@ def cmd_sessions(args, sessions_parser=None):
             delete_target_ids = [resolved_session_id]
             if args.delete_after_verified:
                 delete_target_ids = db.get_session_delete_targets(
-                    resolved_session_id
+                    resolved_session_id,
+                    include_compression_lineage=lineage_is_logical,
                 )
 
             exported_items = []
@@ -724,6 +725,7 @@ def cmd_sessions(args, sessions_parser=None):
                     resolved_session_id,
                     sessions_dir=sessions_dir,
                     expected_delete_ids=delete_target_ids,
+                    include_compression_lineage=lineage_is_logical,
                 ):
                     delegate_count = len(delete_target_ids) - 1
                     delegate_suffix = (

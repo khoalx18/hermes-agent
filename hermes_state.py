@@ -239,6 +239,49 @@ def _delete_delegate_children(conn, parent_ids: List[str]) -> List[str]:
         conn.execute(f"DELETE FROM sessions WHERE id IN ({ph})", ids)
     return ids
 
+def _compression_lineage_ids(conn, session_id: str) -> List[str]:
+    """Every row forming one logical conversation with *session_id*.
+
+    Compression continuations (``parent.end_reason == 'compression'``) are one
+    logical conversation projected root→tip by :meth:`list_sessions_rich`.
+    Mutating only the surfaced tip lets the still-present root resurrect it on
+    the next listing (the bug that motivated the whole-chain flip in
+    :meth:`set_session_archived`). Returns the ids including *session_id*
+    itself, in arbitrary order.
+    """
+    rows = conn.execute(
+        """
+        WITH RECURSIVE
+          ancestors(id) AS (
+            SELECT ?
+            UNION
+            SELECT parent.id
+            FROM ancestors a
+            JOIN sessions child ON child.id = a.id
+            JOIN sessions parent ON parent.id = child.parent_session_id
+            WHERE parent.end_reason = 'compression'
+          ),
+          descendants(id) AS (
+            SELECT ?
+            UNION
+            SELECT child.id
+            FROM descendants d
+            JOIN sessions parent ON parent.id = d.id
+            JOIN sessions child ON child.parent_session_id = parent.id
+            WHERE parent.end_reason = 'compression'
+          ),
+          lineage(id) AS (
+            SELECT id FROM ancestors
+            UNION
+            SELECT id FROM descendants
+          )
+        SELECT id FROM lineage
+        """,
+        (session_id, session_id),
+    )
+    return [row["id"] for row in rows]
+
+
 T = TypeVar("T")
 
 DEFAULT_DB_PATH = get_hermes_home() / "state.db"
@@ -7932,13 +7975,20 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         except OSError:
             pass
 
-    def get_session_delete_targets(self, session_id: str) -> List[str]:
+    def get_session_delete_targets(
+        self,
+        session_id: str,
+        include_compression_lineage: bool = True,
+    ) -> List[str]:
         """Return every session row that :meth:`delete_session` would remove.
 
         The requested session is first, followed by its recursively discovered
-        delegate/subagent children. Branch and compression children are not
-        included because deletion preserves them by orphaning their parent
-        reference.
+        delegate/subagent children. When *include_compression_lineage* is set
+        (the default), compression ancestors and descendants are included too —
+        they form one logical conversation with *session_id*, and deleting only
+        the surfaced tip leaves the root to resurrect it in the next listing.
+        Branch children are not included because deletion preserves them by
+        orphaning their parent reference.
         """
         with self._lock:
             exists = self._conn.execute(
@@ -7946,25 +7996,37 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             ).fetchone()
             if not exists:
                 return []
-            delegate_ids = _collect_delegate_child_ids(self._conn, [session_id])
-        return [session_id, *sorted(delegate_ids)]
+            ids = [session_id]
+            if include_compression_lineage:
+                ids = _compression_lineage_ids(self._conn, session_id)
+            delegate_ids = _collect_delegate_child_ids(self._conn, ids)
+        return [session_id, *sorted({*ids, *delegate_ids} - {session_id})]
 
     def delete_session(
         self,
         session_id: str,
         sessions_dir: Optional[Path] = None,
         expected_delete_ids: Optional[List[str]] = None,
+        include_compression_lineage: bool = True,
     ) -> bool:
         """Delete a session and all its messages.
 
         Delegate subagent children (``model_config._delegate_from``) are
         cascade-deleted with the parent so they never resurface in session
-        pickers as orphaned rows. Branch / compression children are orphaned
+        pickers as orphaned rows. Branch children are orphaned
         (``parent_session_id → NULL``) so they remain accessible independently.
+        With *include_compression_lineage* (default), compression ancestors and
+        descendants are deleted together: the desktop/projections surface one
+        logical conversation (root projected forward to its live tip), so
+        deleting only the displayed tip would let the still-present root
+        resurrect the conversation on the next listing — mirroring how
+        :meth:`set_session_archived` flips the whole chain. Pass ``False`` for
+        single-row semantics (CLI ``--lineage single`` keeps its
+        delete-one-row contract).
         When *sessions_dir* is provided, also removes on-disk transcript
         files (``.json`` / ``.jsonl`` / ``request_dump_*``) for every deleted
         session. When *expected_delete_ids* is provided, deletion proceeds only
-        if the parent plus delegate cascade still matches that exact set. This
+        if the kill set (lineage + delegates) still matches that exact set. This
         lets export-before-delete callers fail closed if a new delegate appears
         after they materialize their archive. The delegate tree is re-walked
         inside the write transaction on purpose (TOCTOU guard); the cost is
@@ -7982,30 +8044,48 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             )
             if cursor.fetchone() is None:
                 return False
+            kill_ids = (
+                _compression_lineage_ids(conn, session_id)
+                if include_compression_lineage
+                else [session_id]
+            )
             if expected_ids is not None:
                 actual_ids = {
-                    session_id,
-                    *_collect_delegate_child_ids(conn, [session_id]),
+                    *kill_ids,
+                    *_collect_delegate_child_ids(conn, kill_ids),
                 }
                 if actual_ids != expected_ids:
                     return False
-            removed_delegate_ids.extend(_delete_delegate_children(conn, [session_id]))
+            removed_delegate_ids.extend(_delete_delegate_children(conn, kill_ids))
             # Orphan remaining child sessions (branches, etc.) so FK is satisfied.
+            placeholders = ",".join("?" * len(kill_ids))
             conn.execute(
-                "UPDATE sessions SET parent_session_id = NULL "
-                "WHERE parent_session_id = ?",
-                (session_id,),
+                f"UPDATE sessions SET parent_session_id = NULL "
+                f"WHERE parent_session_id IN ({placeholders})",
+                kill_ids,
             )
-            conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
-            conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            conn.execute(
+                f"DELETE FROM messages WHERE session_id IN ({placeholders})",
+                kill_ids,
+            )
+            conn.execute(
+                f"DELETE FROM sessions WHERE id IN ({placeholders})",
+                kill_ids,
+            )
             self._delete_unreferenced_system_prompts(conn)
             return True
 
         deleted = self._execute_write(_do)
         if deleted:
+            removed_ids = (
+                _compression_lineage_ids(self._conn, session_id)
+                if include_compression_lineage
+                else [session_id]
+            )
+            for kill_id in removed_ids:
+                self._remove_session_files(sessions_dir, kill_id)
             for delegate_id in removed_delegate_ids:
                 self._remove_session_files(sessions_dir, delegate_id)
-            self._remove_session_files(sessions_dir, session_id)
         return bool(deleted)
 
     def delete_session_if_empty(
@@ -8069,6 +8149,10 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         * Delegate subagent children (``model_config._delegate_from``) are
           cascade-deleted with their parent; branch children are orphaned
           (``parent_session_id → NULL``) so they stay accessible.
+        * Compression lineage (root + continuations of a logical conversation)
+          is cascade-deleted with any of its members, mirroring
+          single-session :meth:`delete_session` — deleting only a surfaced
+          tip would let the chain root resurrect it on the next listing.
         * Messages and the session row both go in one
           ``_execute_write`` call so a partial failure can't leave the
           DB in a "messages gone but session row still there" state.
@@ -8105,8 +8189,20 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             if not existing:
                 return 0
 
-            existing_placeholders = ",".join("?" * len(existing))
-            removed_delegate_ids.extend(_delete_delegate_children(conn, existing))
+            # Expand each requested id to its full compression lineage
+            # (root + continuations = one logical conversation), mirroring
+            # single-session delete. Deleting only a surfaced tip would leave
+            # the chain's root to resurrect it on the next sidebar listing.
+            kill_ids = sorted(
+                {
+                    kid
+                    for sid in existing
+                    for kid in _compression_lineage_ids(conn, sid)
+                }
+            )
+
+            existing_placeholders = ",".join("?" * len(kill_ids))
+            removed_delegate_ids.extend(_delete_delegate_children(conn, kill_ids))
             # Orphan remaining children whose parent is in the kill list so the
             # FK constraint stays satisfied. Pin children whose parent
             # is itself in the kill list rather than NULL-ing parents
@@ -8115,19 +8211,19 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             conn.execute(
                 f"UPDATE sessions SET parent_session_id = NULL "
                 f"WHERE parent_session_id IN ({existing_placeholders})",
-                existing,
+                kill_ids,
             )
             conn.execute(
                 f"DELETE FROM messages WHERE session_id IN ({existing_placeholders})",
-                existing,
+                kill_ids,
             )
             conn.execute(
                 f"DELETE FROM sessions WHERE id IN ({existing_placeholders})",
-                existing,
+                kill_ids,
             )
             self._delete_unreferenced_system_prompts(conn)
-            removed_ids.extend(existing)
-            return len(existing)
+            removed_ids.extend(kill_ids)
+            return len(kill_ids)
 
         count = self._execute_write(_do)
         for sid in removed_delegate_ids:
